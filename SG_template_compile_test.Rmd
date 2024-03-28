@@ -1,0 +1,210 @@
+---
+title: "Compile data from templates - test"
+author: "Jeanette Lyerly"
+date: "December 14, 2023"
+output: html_document
+editor_options: 
+  chunk_output_type: console
+---
+
+### Purpose
+
+The purpose of this script is to load the data for a given nursery and then compile it into a single file for downstream processing. This script will test compiling data from the updated template draft for 2023-2024.   
+
+### Load libraries
+
+This section will load the libraries needed. If these are not installed then the user will need to run:   
+install.packages(name of library)   
+for each package that needs installation.   
+
+```{r}
+knitr::opts_chunk$set(echo = FALSE)
+library(plyr)
+library(tidyverse)
+library(readxl)
+library(openxlsx)
+library(here)
+
+```
+
+### Data Import
+
+The data will be stored in two folders - raw and compiled.      
+The raw data folder has the data files from the breeders.  
+The compiled data folder is the output folder.   
+
+We have one excel file per location. In the excel template file there is a tab for plot data ("Location Data Form") and a tab for means data ("Summary Data Form").   
+
+**User input:**   
+
+User should input the names of the sheets in the template (these should not change) and the number of entries.   
+Also input the names of the input and output folders (if different).
+
+```{r}
+mynursery <- c("UES_test_data") #this is the nursery folder
+
+means_data_tab <- c("Summary Data Form") #this is the name of the summary data tab
+noEntries <- 35 #put the number of nursery entries here - this will determine how many lines we are going to read off the means table
+mydatatype <- c("means") #we are making a variable to say for this section we will read in means/summary data
+
+plot_data_tab <- c("Location Data Form") #this is the name of the tab with the plot data 
+
+rawfolder <- c("raw_data") #we are going to read sheets out of the raw data folder
+compiledfolder <- c("compiled_data") #at the end we are going to save data to the clean data folder
+
+```
+
+Create the correct file path using the user information above, then read in the data files.
+Note that all variables will read in as text. We will correct the numeric variables.
+
+First we will read in the means/summary data tabs.
+
+```{r}
+
+#get a list of the files that are in the correct folder
+file_list <- list.files(path = here::here(paste(mynursery, rawfolder, sep = "/")), pattern='*.xlsx')
+
+#create the correct file path
+mypath <- here::here(paste(mynursery, rawfolder, sep = "/"))
+
+#means data
+#read in the files as a list of data frames and bind them together into a data frame called mydata
+#read in from sheet = means_data_tab
+#skip 7 lines for the header
+#include column names
+#missing data types accepted are NA, dash, dot, and blank cells
+#the number of lines read in for a means file is determined by the number of entries
+mydata_means <- map_df(paste0(here::here(mypath, file_list)), 
+                 ~read_excel(.x, sheet = means_data_tab, skip = 7, col_names = TRUE, na = c("", "-", "NA", "."), 
+                             guess_max = 10000, col_types = "text", 
+                             n_max = ifelse(mydatatype == "means", noEntries, Inf)))
+
+```
+
+Next we will read in the plot/location data tabs.
+
+```{r}
+
+#plot data
+#read in the files as a list of data frames and bind them together into a data frame called mydata
+#read in from sheet = plot_data_tab
+#skip 2 lines for the header
+#include column names
+#missing data types accepted are NA, dash, dot, and blank cells
+#the number of lines read in here is all lines
+mydata_plot <- map_df(paste0(here::here(mypath, file_list)), 
+                 ~read_excel(.x, sheet = plot_data_tab, skip = 2, col_names = TRUE, na = c("", "-", "NA", "."), 
+                             guess_max = 10000, col_types = "text"))
+
+```
+
+Note that the "OTHER" columns are getting numbers attached to their names. If the breeder had designated something as OTHER then this column would have a real name.
+
+
+### Format variables
+
+All the variables read in as text (sometimes excel has numbers stored as text and so doesn't play well with others). We want to correct this for the numeric variables.
+
+**User input:** 
+
+Update the list of text in the code chunk below if needed. The starting variables are:   
+text_vars <- c("EXPT", "LOC", "TRIAL", "ID", "DESIG", "PED", "NOTES") 
+
+
+```{r}
+#check that the data imported - all variables are character
+glimpse(mydata_means)
+glimpse(mydata_plot)
+
+#all the columns read in as text - this is not what we want for analysis so we will correct that
+text_vars <- c("EXPT", "LOC", "TRIAL", "ID", "DESIG", "PED", "NOTES") #these are the text variables
+
+#change anything that's not in the above list to be numeric
+fix_text_vars <- function(df) {
+          df <- df %>%
+            mutate(across(-c(any_of(text_vars)), as.numeric))
+          return(df)
+}
+
+mydata_means <- fix_text_vars(mydata_means)
+mydata_plot <- fix_text_vars(mydata_plot)
+
+```
+
+### Format columns (optional)
+
+Use this section to edit the file. Move variable names around, etc.   
+In this example we will move all the data descriptor variables to the beginning of the data frame.   
+
+We will also have the option to remove columns where ALL data is missing.  
+
+**User input:**   
+Add any data descriptors not included here.
+
+```{r}
+#these are the data descriptors for this data
+data_descriptors <- c("EXPT", "YEAR", "TRIAL", "LOC", "FIELD", "ROW", "RANGE", "PLOT", "REP", "BLOCK", "ENTRY", "ID", "DESIG", "PED", "NOTES")
+
+#move the descriptors to the beginning
+mydata_means <- mydata_means %>% 
+  dplyr::select(any_of(data_descriptors), everything())
+glimpse(mydata_means)
+
+mydata_plot <- mydata_plot %>% 
+  dplyr::select(any_of(data_descriptors), everything())
+glimpse(mydata_plot)
+
+
+#remove columns where ALL values are missing
+#means
+mydata_means <- mydata_means %>% 
+  dplyr::select(where(~!all(is.na(.x))))
+
+#plot
+mydata_plot <- mydata_plot %>% 
+  dplyr::select(where(~!all(is.na(.x))))
+
+```
+
+### Check data
+
+Look at the summaries for a quick data check.
+
+```{r}
+summary(mydata_means)
+summary(mydata_plot)
+
+mydata_means %>% 
+  pivot_longer(., cols = -c(any_of(data_descriptors)), names_to = "TRAIT", values_to = "MEASUREMENT") %>%
+  ggplot(., aes(x = MEASUREMENT)) +
+  geom_histogram() +
+  facet_wrap(~TRAIT, scales = "free")
+
+```
+
+### Save files
+
+Use this section to save the bound data into a new csv file. 
+
+**User input:**
+
+Type the file name that you want. The file will be saved to the compiled data folder. Note that this output format has the locations stacked on top of one another.
+
+```{r}
+st <- format(Sys.time(), "%Y-%m-%d") #this sets the date for the output files
+
+myfilename_means <- c("TEST_means_") #type your file name for the compiled means
+myfilename_plot <- c("TEST_plot_") #type your file name for the compiled plot data
+
+myfilename_means <- paste0(myfilename_means, st, ".csv") #this adds the date stamp and creates the full file name 
+myfilename_plot <- paste0(myfilename_plot, st, ".csv") #this adds the date stamp and creates the full file name 
+
+#write data to files
+write.csv(mydata_means, file = here::here(paste(mynursery, compiledfolder, myfilename_means, sep = "/")), row.names = F)
+write.csv(mydata_plot, file = here::here(paste(mynursery, compiledfolder, myfilename_plot, sep = "/")), row.names = F)
+
+```
+
+
+
+
